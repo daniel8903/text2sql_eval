@@ -38,3 +38,6 @@ def extract_json_block(text):
     if match:
         return match.group(1)
     return text  # fallback to whole string
+
+def remove_think(text):
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)

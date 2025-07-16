@@ -5,7 +5,9 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "azure-identity>=1.23.1",
     "datasets>=2.14.4",
+    "dotenv>=0.9.9",
     "fastparquet>=2024.11.0",
     "fsspec>=2025.7.0",
     "graphviz>=0.21",
@@ -14,6 +16,7 @@ dependencies = [
     "matplotlib-venn>=1.1.2",
     "nvidia-ml-py3>=7.352.0",
     "ollama>=0.5.1",
+    "openai>=1.96.1",
     "pandas>=2.3.1",
     "pyarrow>=20.0.0",
     "requests>=2.32.4",
@@ -21,4 +24,5 @@ dependencies = [
     "sqlglot>=27.0.0",
     "sqlparse>=0.5.3",
     "tqdm>=4.67.1",
+    "typer>=0.16.0",
 ]
