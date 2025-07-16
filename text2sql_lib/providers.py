@@ -101,6 +101,7 @@ class AzureLLM(BaseLLM):
             messages=messages,
             temperature=temperature,
             stream=stream,
+            max_completion_tokens=25_000
         )
         first_choice = rsp.choices[0].message.content
         return {

@@ -2,13 +2,13 @@
 CLI entry-point for the text-to-SQL benchmark.
 
 Usage (default everything):
-    python -m text2sql_lib.cli qwen2.5:latest
+    python main.py qwen2.5:latest
 
 Same but judge with GPT-4o via Azure:
-    python -m text2sql_lib.cli qwen2.5:latest --judge gpt-4o --judge-provider azure
+    python main.py qwen2.5:latest --judge gpt-4o --judge-provider azure
 
 Full control (example):
-    python -m text2sql_lib.cli qwen2.5:latest \
+    python main.py qwen2.5:latest \
         --provider ollama --host http://192.168.178.187:11434 \
         --dataset data/my.parquet --log logs/myrun.jsonl \
         --judge qwen3-30b-a3b --judge-provider siemens --judge-temp 0.15
