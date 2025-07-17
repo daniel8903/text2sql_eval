@@ -103,23 +103,142 @@ def _run_llm_chat(
 # ----------------------------------------------------------------------
 # 2.  Generation utilities
 # ----------------------------------------------------------------------
+# def generate_sql_from_prompt(
+#     llm,
+#     prompt: str,
+#     context: str,
+#     model_cfg: ModelConfig,
+# ) -> Dict[str, Any]:
+#     """Generate SQL and collect timing/token stats (Sekunden!)."""
+#     # ---------- build messages ---------------------------------------
+#     system_prompt = """
+#     You are an expert database engineer whose task is to translate an
+#     English question into a single, executable SQL statement.
+
+#     Rules
+#     2. Use standard ANSI SQL.
+#     3. Refer ONLY to tables / columns present in the provided schema.
+#     """
+    
+#     user_prompt = (
+#         "### Context (database schema)\n"
+#         f"{context}\n\n"
+#         "### Question\n"
+#         f"{prompt}\n\n"
+#         "### SQL"
+#     )
+
+#     messages = [
+#         {"role": "system", "content": system_prompt.strip()},
+#         {"role": "user", "content": user_prompt},
+#     ]
+
+#     # ---------- LLM call ---------------------------------------------
+#     t0 = time.time()
+#     rsp = _run_llm_chat(
+#         llm,
+#         model_name=model_cfg.name,
+#         messages=messages,
+#         temperature=model_cfg.temperature,
+#         stream=False,
+#     )
+#     latency = time.time() - t0
+
+#     raw_completion = rsp["message"]["content"]
+#     cleaned = remove_think(raw_completion)
+#     extracted_sql = extract_sql(cleaned)
+
+#     # ggf. Ollama-spezifische Telemetrie
+#     total_duration_sec = _ns_to_s(rsp.get("total_duration"))
+#     load_duration_sec = _ns_to_s(rsp.get("load_duration"))
+#     prompt_eval_count = rsp.get("prompt_eval_count", 0)
+#     prompt_eval_sec = _ns_to_s(rsp.get("prompt_eval_duration"))
+#     eval_count = rsp.get("eval_count", 0)
+#     eval_duration_sec = _ns_to_s(rsp.get("eval_duration"))
+
+#     total_tokens = (prompt_eval_count + eval_count) or None
+
+#     return {
+#         "generated_sql_raw": raw_completion,
+#         "generated_sql_extracted": extracted_sql,
+#         "latency_sec": latency,
+#         "total_duration_sec": total_duration_sec,
+#         "load_duration_sec": load_duration_sec,
+#         "tokens_prompt": prompt_eval_count,
+#         "prompt_eval_sec": prompt_eval_sec,
+#         "tokens_completion": eval_count,
+#         "completion_eval_sec": eval_duration_sec,
+#         "tokens_total": total_tokens,
+#         "tokens_per_sec": total_tokens / latency if total_tokens and latency else None,
+#     }
+
+def _collect_stats(resp: Dict[str, Any], latency: float) -> Dict[str, Any]:
+    """Extrahiert Token- und Telemetrie­infos aus Azure/OpenAI oder Ollama."""
+    stats: Dict[str, Any] = {
+        # Pflicht-Keys, die es *vorher schon gab*:
+        "latency_sec":            latency,
+        "total_duration_sec":     None,
+        "load_duration_sec":      None,
+        "tokens_prompt":          None,
+        "prompt_eval_sec":        None,   # entspricht prompt_eval_duration
+        "tokens_completion":      None,
+        "completion_eval_sec":    None,   # entspricht eval_duration
+        "tokens_total":           None,
+        "tokens_per_sec":         None,
+        # zusätzliche, völlig neue Keys (optional):
+        "cached_prompt_tokens":   None,
+        "cache_hit":              resp.get("cache_hit"),
+    }
+
+    # ---------- Azure / OpenAI ----------------------------------------
+    if usage := resp.get("usage"):
+        u = usage.model_dump() if hasattr(usage, "model_dump") else usage
+        stats["tokens_prompt"]       = u.get("prompt_tokens")
+        stats["tokens_completion"]   = u.get("completion_tokens")
+        stats["tokens_total"]        = u.get("total_tokens")
+        # Check if cache in usage 
+        prompt_tokens_details = u.get("prompt_tokens_details")
+        if isinstance(prompt_tokens_details, dict):
+            stats["cached_prompt_tokens"] = prompt_tokens_details.get("cached_tokens")
+        else:
+            stats["cached_prompt_tokens"] = None  # Or skip setting it
+
+    # ---------- Ollama -------------------------------------------------
+    if "total_duration" in resp:          # Ollama spezifisch
+        stats["total_duration_sec"]  = _ns_to_s(resp["total_duration"])
+        stats["load_duration_sec"]   = _ns_to_s(resp.get("load_duration"))
+        stats["prompt_eval_sec"]     = _ns_to_s(resp.get("prompt_eval_duration"))
+        stats["completion_eval_sec"] = _ns_to_s(resp.get("eval_duration"))
+
+        stats["tokens_prompt"]     = resp.get("prompt_eval_count")
+        stats["tokens_completion"] = resp.get("eval_count")
+        stats["tokens_total"]      = (stats["tokens_prompt"] or 0) + (stats["tokens_completion"] or 0)
+
+    # --------- abgeleiteter Wert --------------------------------------
+    if stats["tokens_total"] and latency:
+        stats["tokens_per_sec"] = stats["tokens_total"] / latency
+
+    return stats
+
+
+# ----------------------------------------------------------------------
 def generate_sql_from_prompt(
     llm,
     prompt: str,
     context: str,
-    model_cfg: ModelConfig,
+    model_cfg,
 ) -> Dict[str, Any]:
-    """Generate SQL and collect timing/token stats (Sekunden!)."""
-    # ---------- build messages ---------------------------------------
-    system_prompt = """
-    You are an expert database engineer whose task is to translate an
-    English question into a single, executable SQL statement.
+    """Erstellt SQL + sammelt Metriken, ohne bestehende Key-Namen zu ändern."""
 
-    Rules
-    2. Use standard ANSI SQL.
-    3. Refer ONLY to tables / columns present in the provided schema.
-    """
-    
+    system_prompt = (
+        "You are an expert database engineer whose task is to translate an "
+        "English question into a single, executable SQL statement.\n\n"
+        "Rules:\n"
+        "1. Use standard ANSI SQL.\n"
+        "2. Refer ONLY to tables / columns present in the provided schema."
+        "/no_think"
+    )
+
     user_prompt = (
         "### Context (database schema)\n"
         f"{context}\n\n"
@@ -128,49 +247,35 @@ def generate_sql_from_prompt(
         "### SQL"
     )
 
-    messages = [
-        {"role": "system", "content": system_prompt.strip()},
-        {"role": "user", "content": user_prompt},
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_prompt},
     ]
 
-    # ---------- LLM call ---------------------------------------------
+    # ------------ Aufruf + Latenz­messung -----------------------------
     t0 = time.time()
-    rsp = _run_llm_chat(
-        llm,
-        model_name=model_cfg.name,
-        messages=messages,
-        temperature=model_cfg.temperature,
-        stream=False,
+    resp = llm.chat(
+        model_name   = model_cfg.name,
+        messages     = messages,
+        temperature  = model_cfg.temperature,
+        stream       = False,
     )
     latency = time.time() - t0
 
-    raw_completion = rsp["message"]["content"]
-    cleaned = remove_think(raw_completion)
-    extracted_sql = extract_sql(cleaned)
+    raw  = resp["message"]["content"]          # unverändert
+    sql  = extract_sql(remove_think(raw))      # bereinigt
+    # ------------ Stats zusammenführen --------------------------------
+    stats = _collect_stats(resp, latency)
 
-    # ggf. Ollama-spezifische Telemetrie
-    total_duration_sec = _ns_to_s(rsp.get("total_duration"))
-    load_duration_sec = _ns_to_s(rsp.get("load_duration"))
-    prompt_eval_count = rsp.get("prompt_eval_count", 0)
-    prompt_eval_sec = _ns_to_s(rsp.get("prompt_eval_duration"))
-    eval_count = rsp.get("eval_count", 0)
-    eval_duration_sec = _ns_to_s(rsp.get("eval_duration"))
-
-    total_tokens = (prompt_eval_count + eval_count) or None
-
-    return {
-        "generated_sql_raw": raw_completion,
-        "generated_sql_extracted": extracted_sql,
-        "latency_sec": latency,
-        "total_duration_sec": total_duration_sec,
-        "load_duration_sec": load_duration_sec,
-        "tokens_prompt": prompt_eval_count,
-        "prompt_eval_sec": prompt_eval_sec,
-        "tokens_completion": eval_count,
-        "completion_eval_sec": eval_duration_sec,
-        "tokens_total": total_tokens,
-        "tokens_per_sec": total_tokens / latency if total_tokens and latency else None,
+    # ------------ Rückgabe im alten Format + neue Felder --------------
+    result: Dict[str, Any] = {
+        # --- bereits existente Felder ---
+        "generated_sql_raw": raw,
+        "generated_sql_extracted":    sql,
+        **stats,                       # latency_sec usw. bleiben unverändert
+        # --- hier können weitere neue Felder angehängt werden ----------
     }
+    return result
 
 
 def ask_llm_equivalence_judge(
