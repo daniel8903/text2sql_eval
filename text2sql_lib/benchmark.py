@@ -236,7 +236,7 @@ def generate_sql_from_prompt(
         "Rules:\n"
         "1. Use standard ANSI SQL.\n"
         "2. Refer ONLY to tables / columns present in the provided schema."
-        "/no_think"
+        "/think"
     )
 
     user_prompt = (
