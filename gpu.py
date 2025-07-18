@@ -5,7 +5,7 @@ import os
 import time
 
 LOG_FILE = "gpu_metrics_log.csv"
-LOG_INTERVAL_SECONDS = 5  # Logging alle 5 Sekunden
+LOG_INTERVAL_SECONDS = 2  # Logging alle 5 Sekunden
 
 def bytes_to_mb(b):
     return round(b / 1024 / 1024, 2)
