@@ -36,6 +36,7 @@ class LLMResultMetrics:
     equiv_ids: List[int] = field(default_factory=list)        # llm_equivalent
     fulfills_intent_ids: List[int] = field(default_factory=list)
     superior_ids: List[int] = field(default_factory=list)
+    equal_ids: List[int] = field(default_factory=list)
     incorrect_ids: List[int] = field(default_factory=list)
 
     # token / latency
@@ -63,7 +64,7 @@ class LLMResultMetrics:
                 "exact":      self.exact_match_ids,
                 "ast":        self.ast_match_ids,
                 "technical":  self.equiv_ids,
-                "intent":     self.fulfills_intent_ids,
+                "intent":     set(self.fulfills_intent_ids + self.superior_ids), # + self.equal_ids,
             }[metric]
 
             good_ids: set = set(id_pool)          # ← ensure *set* for “&”
@@ -104,7 +105,12 @@ class LLMResultMetrics:
     # superior
     @property
     def superior(self) -> float:
-        return len(self.superior_) / self.total_queries if self.total_queries else 0
+        return len(self.superior_ids) / self.total_queries if self.total_queries else 0
+    
+    @property
+    def equal(self) -> float:
+        return len(self.equal_ids) / self.total_queries if self.total_queries else 0
+
 
     # tokens / cost ------------------------------------------------------- #
     @property
@@ -167,6 +173,11 @@ class LLMResultMetrics:
             lambda r: (ej := r.get("enhanced_judgment")) and
                       ej.get("superiority") in {"generated"}
         )
+        equal  = _ids_if(
+            rows,
+            lambda r: (ej := r.get("enhanced_judgment")) and
+                      ej.get("superiority") in {"equal"}
+        )
         incorrect = [
             r["example_id"] for r in rows
             if r["example_id"] not in (*exact_ids, *ast_ids, *equiv_ids, *fulfills)
@@ -211,6 +222,7 @@ class LLMResultMetrics:
             equiv_ids=equiv_ids,
             fulfills_intent_ids=fulfills,
             superior_ids=superior,
+            equal_ids=equal,
             incorrect_ids=incorrect,
             total_prompt_tokens=prompt_tok,
             total_completion_tokens=compl_tok,
