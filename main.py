@@ -104,6 +104,18 @@ def main(
     max_examples: int = typer.Option(
         5, "--max-examples", "-n", help="How many rows to run from dataset"
     ),
+    use_rag: bool = typer.Option(
+        False, "--use-rag", help="Enable RAG for few-shot examples."
+    ),
+    retriever_n_results: int = typer.Option(
+        3, "--retriever-n-results", help="Number of results for retriever to return."
+    ),
+    retriever_offset: int = typer.Option(
+        0, "--retriever-offset", help="Number of results to skip from the retriever."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable verbose logging."
+    ),
 ):
     """Run the benchmark with a one-liner."""
     # ----------- derive configs ----------------------------------------
@@ -137,6 +149,10 @@ def main(
         model_cfg=gen_cfg,
         judge_model_cfg=judge_cfg,
         total_examples=max_examples,
+        use_rag=use_rag,
+        retriever_n_results=retriever_n_results,
+        retriever_offset=retriever_offset,
+        verbose=verbose,
     )
 
     typer.echo(f"\n✅  Finished. Log written to {log}")
