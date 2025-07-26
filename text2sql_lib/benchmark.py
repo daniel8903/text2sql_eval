@@ -24,6 +24,7 @@ from typing import Dict, Any, List, Optional
 import pandas as pd
 from tqdm import tqdm
 
+from .retriever import retrieve_similar_examples
 from .sql_utils import (
     normalize_sql,
     extract_sql,
@@ -99,79 +100,6 @@ def _run_llm_chat(
         stream=stream,
     )
 
-
-# ----------------------------------------------------------------------
-# 2.  Generation utilities
-# ----------------------------------------------------------------------
-# def generate_sql_from_prompt(
-#     llm,
-#     prompt: str,
-#     context: str,
-#     model_cfg: ModelConfig,
-# ) -> Dict[str, Any]:
-#     """Generate SQL and collect timing/token stats (Sekunden!)."""
-#     # ---------- build messages ---------------------------------------
-#     system_prompt = """
-#     You are an expert database engineer whose task is to translate an
-#     English question into a single, executable SQL statement.
-
-#     Rules
-#     2. Use standard ANSI SQL.
-#     3. Refer ONLY to tables / columns present in the provided schema.
-#     """
-    
-#     user_prompt = (
-#         "### Context (database schema)\n"
-#         f"{context}\n\n"
-#         "### Question\n"
-#         f"{prompt}\n\n"
-#         "### SQL"
-#     )
-
-#     messages = [
-#         {"role": "system", "content": system_prompt.strip()},
-#         {"role": "user", "content": user_prompt},
-#     ]
-
-#     # ---------- LLM call ---------------------------------------------
-#     t0 = time.time()
-#     rsp = _run_llm_chat(
-#         llm,
-#         model_name=model_cfg.name,
-#         messages=messages,
-#         temperature=model_cfg.temperature,
-#         stream=False,
-#     )
-#     latency = time.time() - t0
-
-#     raw_completion = rsp["message"]["content"]
-#     cleaned = remove_think(raw_completion)
-#     extracted_sql = extract_sql(cleaned)
-
-#     # ggf. Ollama-spezifische Telemetrie
-#     total_duration_sec = _ns_to_s(rsp.get("total_duration"))
-#     load_duration_sec = _ns_to_s(rsp.get("load_duration"))
-#     prompt_eval_count = rsp.get("prompt_eval_count", 0)
-#     prompt_eval_sec = _ns_to_s(rsp.get("prompt_eval_duration"))
-#     eval_count = rsp.get("eval_count", 0)
-#     eval_duration_sec = _ns_to_s(rsp.get("eval_duration"))
-
-#     total_tokens = (prompt_eval_count + eval_count) or None
-
-#     return {
-#         "generated_sql_raw": raw_completion,
-#         "generated_sql_extracted": extracted_sql,
-#         "latency_sec": latency,
-#         "total_duration_sec": total_duration_sec,
-#         "load_duration_sec": load_duration_sec,
-#         "tokens_prompt": prompt_eval_count,
-#         "prompt_eval_sec": prompt_eval_sec,
-#         "tokens_completion": eval_count,
-#         "completion_eval_sec": eval_duration_sec,
-#         "tokens_total": total_tokens,
-#         "tokens_per_sec": total_tokens / latency if total_tokens and latency else None,
-#     }
-
 def _collect_stats(resp: Dict[str, Any], latency: float) -> Dict[str, Any]:
     """Extrahiert Token- und Telemetrie­infos aus Azure/OpenAI oder Ollama."""
     stats: Dict[str, Any] = {
@@ -227,6 +155,10 @@ def generate_sql_from_prompt(
     prompt: str,
     context: str,
     model_cfg,
+    use_rag: bool = False,
+    retriever_n_results: int = 3,
+    retriever_offset: int = 0,
+    verbose: bool = False,
 ) -> Dict[str, Any]:
     """Erstellt SQL + sammelt Metriken, ohne bestehende Key-Namen zu ändern."""
 
@@ -239,13 +171,29 @@ def generate_sql_from_prompt(
         "/think"
     )
 
+    few_shot_examples = ""
+    rag_results = None
+    if use_rag:
+        results = retrieve_similar_examples(
+            prompt, n_results=retriever_n_results, offset=retriever_offset
+        )
+        if verbose:
+            rag_results = results
+        examples = []
+        for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+            examples.append(f"Question: {doc}\nSQL: {meta['sql']}")
+        few_shot_examples = "\n\n### Examples\n" + "\n\n".join(examples)
+
     user_prompt = (
+        f"{few_shot_examples}\n\n"
         "### Context (database schema)\n"
         f"{context}\n\n"
         "### Question\n"
         f"{prompt}\n\n"
         "### SQL"
     )
+
+
 
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": system_prompt},
@@ -342,6 +290,10 @@ def run_benchmark(
     total_examples: int = 200,
     gpu_monitor_interval: float = 1.0,
     monitor_gpu: bool = False,
+    use_rag: bool = False,
+    retriever_n_results: int = 3,
+    retriever_offset: int = 0,
+    verbose: bool = False,
 ):
     """
     Parameters
@@ -377,7 +329,16 @@ def run_benchmark(
 
         try:
             # ---- Generierung ----------------------------------------
-            result = generate_sql_from_prompt(gen_llm, prompt, context, model_cfg)
+            result = generate_sql_from_prompt(
+                gen_llm,
+                prompt,
+                context,
+                model_cfg,
+                use_rag=use_rag,
+                retriever_n_results=retriever_n_results,
+                retriever_offset=retriever_offset,
+                verbose=verbose,
+            )
             generated_sql = result["generated_sql_extracted"]
 
             # ---- ground-truth --------------------------------------
@@ -412,6 +373,8 @@ def run_benchmark(
                 "llm_equivalent": llm_equiv,
                 "llm_explanation": llm_explanation,
             }
+            if verbose and result.get("rag_results"):
+                log_entry["rag_results"] = result["rag_results"]
             with open(log_path, "a") as fp:
                 fp.write(json.dumps(log_entry) + "\n")
 
