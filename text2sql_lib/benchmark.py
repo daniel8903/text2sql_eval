@@ -172,27 +172,37 @@ def generate_sql_from_prompt(
 
     few_shot_examples = ""
     rag_results = None
+    retrieval_latency = None # Initialize retrieval_latency
     if use_rag:
+        t0_retrieval = time.time() # Start timing retrieval
         results = retrieve_similar_examples(
             prompt, n_results=retriever_n_results, offset=retriever_offset
         )
+        retrieval_latency = time.time() - t0_retrieval # End timing retrieval
         if verbose:
             rag_results = results
         examples = []
-        for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-            examples.append(f"Question: {doc}\nSQL: {meta['sql']}")
+        for doc, meta, score in zip(results["documents"][0], results["metadatas"][0], results["distances"][0]):
+            # Calculate percentage similarity
+            percent_similarity = (1 - score) * 100
+            examples.append(f"""Example ID: {meta['id']} with similarity score {score:.2f} (Similarity: {percent_similarity:.2f}%)
+Database Schema: {meta['sql_context']}
+Question: {doc}
+Explanation: {meta['sql_explanation']}
+SQL: {meta['sql']}""")
         few_shot_examples = "\n\n### Examples\n" + "\n\n".join(examples)
 
     user_prompt = (
-        f"{few_shot_examples}\n\n"
         "### Context (database schema)\n"
         f"{context}\n\n"
         "### Question\n"
         f"{prompt}\n\n"
+        f"{few_shot_examples}\n\n"
         "### SQL"
     )
 
-
+    # if verbose:
+    #     print(f"{user_prompt}")
 
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": system_prompt},
@@ -203,7 +213,7 @@ def generate_sql_from_prompt(
     t0 = time.time()
     resp = llm.chat(
         model_name   = model_cfg.name,
-        messages     = messages,
+        messages      = messages,
         temperature  = model_cfg.temperature,
         stream       = False,
     )
@@ -221,6 +231,7 @@ def generate_sql_from_prompt(
         "generated_sql_extracted":    sql,
         **stats,                       # latency_sec usw. bleiben unverändert
         # --- hier können weitere neue Felder angehängt werden ----------
+        "retrieval_latency_sec": retrieval_latency, # Add retrieval latency here
     }
     return result
 
@@ -367,6 +378,7 @@ def run_benchmark(
                 "completion_eval_sec": result["completion_eval_sec"],
                 "tokens_total": result["tokens_total"],
                 "tokens_per_sec": result["tokens_per_sec"],
+                "retrieval_latency_sec": result.get("retrieval_latency_sec"), # New field for retrieval latency
                 "match_exact": match_exact,
                 "match_ast": match_ast,
                 "llm_equivalent": llm_equiv,

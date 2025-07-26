@@ -8,7 +8,7 @@ def retrieve_similar_examples(question: str, n_results: int = 3, offset: int = 0
     Retrieves the most similar examples from the ChromaDB collection.
     """
     # Initialize ChromaDB persistent client
-    client = chromadb.PersistentClient(path="./chroma_db")
+    client = chromadb.PersistentClient(path="/Users/daniel/data/chroma_db")
 
     # Use the same embedding function as when indexing
     embedding_fn = OllamaEmbeddingFunction(
